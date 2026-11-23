@@ -8,7 +8,7 @@ from test_service import service, seed, payload
 @pytest.mark.parametrize("platform,source", [("", None), ("telegram", None), ("discord", {"user_id": "demo"}), ("local", {}), ("cli", {})])
 def test_remote_and_missing_context_cannot_read_or_mutate(service, platform, source):
     for raw in ("", "log", "optout +1-555-0100", "consent +1-555-0100 sms test 2026-01-01 UTC"):
-        assert "local owner" in service.command(raw, platform=platform, source=source)
+        assert "Only the owner can" in service.command(raw, platform=platform, source=source)
     with service.ledger.transaction() as db:
         assert db.execute("select count(*) from suppressions").fetchone()[0] == 0
         assert db.execute("select count(*) from contacts").fetchone()[0] == 0

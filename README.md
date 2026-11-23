@@ -37,7 +37,7 @@ after changing settings; the policy is loaded at registration.
 ## What it gates—and what it does not
 
 Gatekeeper registers `pre_tool_call`, `post_tool_call`, `post_gateway_admission`
-and the local-owner `/gatekeeper` command. It registers no model tools, middleware,
+and the owner-only `/gatekeeper` command. It registers no model tools, middleware,
 transport, background job or core override.
 
 * **What a live agent turn actually reaches.** The model-callable tool that can
@@ -181,17 +181,28 @@ or immutable outbound authorization.
 
 ## Owner setup and commands
 
-Every `/gatekeeper` command, including status/log, requires a local session: the
-host-supplied `platform` is `cli`, `tui`, `desktop` or `local` and `source` is either
-`None` or a source whose platform is `local` (Hermes runs slash commands of local
-sessions in the gateway and passes such a source). Messaging platforms, remote
-sources and missing context are refused. This trusts the local
-OS/session owner; it is not a second authentication factor. These commands are
-not agent-callable tools. All examples below are invented demo data.
+Every `/gatekeeper` command, including status/log, requires the owner. Two
+sessions qualify:
+
+* a local session: the host-supplied `platform` is `cli`, `tui`, `desktop` or `local`
+  and `source` is either `None` or a source whose platform is `local` (Hermes runs
+  slash commands of local sessions in the gateway and passes such a source). This
+  trusts the local OS/session owner.
+* a direct chat from an identity listed in `owner_ids` (`platform:user_id`, for
+  example `relay:owner-123`): the gateway's `SessionSource` for the message that
+  carried the command must have that platform (agreeing with the `platform`
+  keyword), `chat_type` `dm` and that `user_id`. Group chats are refused so records
+  are never read out to other participants. This trusts the platform adapter's
+  authentication of the sender; list only identities that adapter authenticates.
+  The host's own slash-command admin list (`allow_admin_from`) can narrow it further.
+
+Every other messaging session, remote source and missing context is refused. These
+commands are not agent-callable tools. All examples below are invented demo data.
 
 ```text
 /gatekeeper
 /gatekeeper log 10
+/gatekeeper resume
 /gatekeeper optout +1-555-0100
 /gatekeeper consent +1-555-0101 sms synthetic-form 2026-01-01 America/Chicago TEST
 /gatekeeper consent demo@example.com email synthetic-form 2026-01-01 unknown
@@ -209,7 +220,8 @@ but removes consent. New consent never removes suppression. V1 deliberately has
 `reply` is the owner's attestation that a reply was actually observed in that
 recipient/channel/thread. It also settles that thread's uncertain pending sends;
 use it only after independently checking them. It grants no consent and lifts no
-suppression. Log output shows timestamps, channel, shortened recipient hash,
+suppression. `resume` retries storage at once and clears a hold that is waiting for
+the owner (see "STOP and inbound visibility"). Log output shows timestamps, channel, shortened recipient hash,
 rule and outcome, never message text or exception details.
 
 ### Settings
@@ -225,11 +237,25 @@ region_windows:
 min_gap_seconds: 0
 templates:
   - "Demo notice for ${topic}."
-stop_keywords: [STOP, STOPALL, UNSUBSCRIBE, CANCEL, END, QUIT]
+stop_keywords: [STOP, STOPALL, UNSUBSCRIBE, CANCEL, END, QUIT, REVOKE, OPTOUT]
 escalate_unrecognized_sends: true
 extra_send_tool_patterns: ["mcp__acme__*push*"]
 allow_tools: ["connectors__gmail__send_email"]
+owner_ids: ["relay:owner-123"]
+defer_approvals: false
 ```
+
+* `stop_keywords` defaults to the CTIA STOP family plus `REVOKE` and `OPTOUT` (the
+  FCC's 2025 revocation rule names "revoke" and "opt out"); `CANCEL` stays in on
+  the broader TCPA reading.
+* `owner_ids` (default empty) lists the `platform:user_id` identities that may run
+  `/gatekeeper` from a direct chat (see above).
+* `defer_approvals` (default `false`) is for hosts that already ask the owner before
+  every outbound text, so a send is not asked about twice. Gatekeeper then never
+  returns `approve` for a recognized send: unanswered-thread and minimum-gap holds
+  become blocks, while an unrecorded time zone and non-template wording are logged as
+  `deferred:<rule>` with outcome `pass` and left to the host's own approval. Suppression,
+  consent and quiet hours block as before. It does not change `escalate_unrecognized_sends`.
 
 * `escalate_unrecognized_sends` (default `true`) turns the send-looking-name approval
   and the `cronjob_manage` delivery approval on or off together. Turning it off removes
@@ -246,7 +272,7 @@ allow_tools: ["connectors__gmail__send_email"]
   entry) make the whole settings block invalid: recognized sends are blocked until it is
   fixed, and the name-based escalation keeps running on its defaults.
 
-Template variables come **only** from local-owner recipient records, never tool
+Template variables come **only** from owner recipient records, never tool
 arguments/model-provided fill values. `$topic` and `${topic}` are simple string
 substitutions; `$$` means a literal dollar sign. No Python expressions, attribute
 access or recursive substitution. Missing variables do not match. Case, whitespace
@@ -260,8 +286,9 @@ hours, threading or wording. It is an explicit reduction in protection.
 
 The public `post_gateway_admission` hook supplies authorized, routed-profile,
 normalized `platform/source/message_id/text` snapshots. Whole-text matching after
-whitespace trimming is case-insensitive: `STOP` matches, `please stop later` does
-not. No fuzzy, substring or language inference occurs.
+whitespace trimming is case-insensitive and ignores trailing `.`/`!` and inner
+spaces, hyphens and underscores: `STOP`, `Stop.` and `opt out` match, `please stop
+later` does not. No fuzzy, substring or language inference occurs.
 
 On an observed STOP, Gatekeeper suppresses the sender ID and, for a DM, its chat
 ID too. It consumes that admitted message silently, without sending confirmation.
@@ -274,9 +301,15 @@ This is **not a raw all-inbound hook**: rejected, ignored, internal, paused/cont
 pending-approval/clarify, running-session steering and idle slash-command traffic
 may never reach it. Messages outside Hermes are invisible. Record unseen optouts
 with `/gatekeeper optout` and unseen replies with `/gatekeeper reply`. A reply
-never creates consent. If inbound storage/identity observation fails, the running
-service latches further recognized sends blocked. Repair the records (including
-any missed optout) and reload; a restart alone does not reconstruct missed events.
+never creates consent. If inbound storage/identity observation fails (or a send
+outcome cannot be recorded), the running service blocks further recognized sends and
+logs an `ALERT Gatekeeper: …` error. It retries storage by itself on the next send
+attempt or status check after a backoff of 5 s, doubling to at most 300 s, and stays
+blocked until a retry succeeds. A STOP whose sender is known is held in memory and
+saved by that retry before sends resume. A STOP that names no sender cannot be saved
+for anyone, so that hold waits for the owner to review it and run `/gatekeeper resume`
+(recording the opt-out first with `/gatekeeper optout`). A restart drops held events;
+record any missed optout by hand.
 
 ## Storage, failure behavior and disclosure
 
@@ -309,7 +342,7 @@ counts as ours before dispatch; it is not proof of delivery. Explicit host
 Confirmed success moves the outbound ordering boundary to observation time. Unknown,
 partial, skipped, missing-ID or missing-observer results remain conservative pending
 holds; an automatic inbound reply cannot unlock a still-pending send. After a true
-observation failure, repair/reload is required. Normal expected rejections do not
+observation failure, sends stay blocked until storage recovers (see above). Normal expected rejections do not
 poison service health. Decision outcomes are policy decisions, not delivery receipts
 or proof that a human approved.
 

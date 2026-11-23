@@ -1,8 +1,9 @@
 """Strict settings validation: a malformed policy must not weaken the gate."""
 from dataclasses import dataclass, field, fields
+import re
 
 from .quiet_hours import window
-from .suppression import KEYWORDS
+from .suppression import KEYWORDS, normalize
 from .wording import validate_template
 
 
@@ -18,6 +19,8 @@ class Settings:
     escalate_unrecognized_sends: bool = True
     extra_send_tool_patterns: tuple = ()
     allow_tools: tuple = ()
+    owner_ids: tuple = ()
+    defer_approvals: bool = False
 
     @classmethod
     def parse(cls, data):
@@ -34,6 +37,12 @@ class Settings:
             if (not isinstance(values, (list, tuple)) or len(values) > 256 or
                     any(not isinstance(v, str) or not v or v.strip() != v or len(v) > 128 for v in values)):
                 raise ValueError("invalid tool list")
+        if type(result.defer_approvals) is not bool:
+            raise ValueError("defer_approvals must be bool")
+        if (not isinstance(result.owner_ids, (list, tuple)) or len(result.owner_ids) > 64 or
+                any(not isinstance(v, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}:[^\s:][^\s]{0,255}", v)
+                    for v in result.owner_ids)):
+            raise ValueError("owner_ids must be platform:user_id strings")
         window(result.start, result.end)
         if not isinstance(result.region_windows, dict):
             raise ValueError("invalid region windows")
@@ -49,6 +58,7 @@ class Settings:
         for text in result.templates:
             validate_template(text)
         return cls(**{**data, "templates": tuple(result.templates),
-                      "stop_keywords": tuple(v.upper() for v in result.stop_keywords),
+                      "stop_keywords": tuple(normalize(v) for v in result.stop_keywords),
+                      "owner_ids": tuple(result.owner_ids),
                       "extra_send_tool_patterns": tuple(result.extra_send_tool_patterns),
                       "allow_tools": tuple(result.allow_tools)})

@@ -94,7 +94,7 @@ def test_gateway_dispatched_local_session_is_the_owner(service, platform, source
     ("", None),
 ])
 def test_remote_or_ambiguous_sources_are_still_refused(service, platform, source):
-    assert "local owner" in service.command("optout +1-555-0100", platform=platform, source=source)
+    assert "Only the owner can" in service.command("optout +1-555-0100", platform=platform, source=source)
     with service.ledger.transaction() as db:
         assert db.execute("select count(*) from suppressions").fetchone()[0] == 0
 

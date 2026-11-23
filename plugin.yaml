@@ -38,8 +38,8 @@ config_schema:
     description: "Exact routine wording, using $variable or ${variable} filled ONLY from owner-stored recipient variables. Empty means approval for every message."
   stop_keywords:
     type: list
-    default: [STOP, STOPALL, UNSUBSCRIBE, CANCEL, END, QUIT]
-    description: "Whole-text, case-insensitive STOP-family keywords after trimming whitespace. Not substring or language detection."
+    default: [STOP, STOPALL, UNSUBSCRIBE, CANCEL, END, QUIT, REVOKE, OPTOUT]
+    description: "Whole-text, case-insensitive STOP-family keywords after trimming whitespace and trailing periods or exclamation marks; inner spaces, hyphens and underscores are ignored (\"opt out\" matches OPTOUT). Not substring or language detection."
   escalate_unrecognized_sends:
     type: bool
     default: true
@@ -52,3 +52,11 @@ config_schema:
     type: list
     default: []
     description: "Exact tool names the owner trusts; never escalated by the unrecognized-send check. Has no effect on send_message or terminal, which are always evaluated."
+  owner_ids:
+    type: list
+    default: []
+    description: "Owner identities, as platform:user_id (for example relay:owner-123), that may run the owner command from a direct chat on that platform. The platform and user ID come from the authenticated session that delivered the command. Everyone else is refused; a local terminal session is always allowed."
+  defer_approvals:
+    type: bool
+    default: false
+    description: "For hosts that already ask the owner before every outbound text: never ask a second time. Unanswered and minimum-gap holds become blocks; unrecorded time zone and non-template wording are logged and left to the host's own approval. Suppression, consent and quiet hours block as before."
