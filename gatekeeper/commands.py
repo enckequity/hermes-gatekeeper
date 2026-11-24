@@ -1,4 +1,4 @@
-"""Local-human administration only; never registered as an agent tool."""
+"""Owner administration only; never registered as an agent tool."""
 from datetime import datetime, timezone
 import json
 import shlex
@@ -7,10 +7,15 @@ from . import consent, history
 from .storage import recipient_id
 from .wording import validate_variables
 
-USAGE = ("Usage: /gatekeeper [log [1-50] | optout <recipient> | "
+USAGE = ("Usage: /gatekeeper [log [1-50] | resume | optout <recipient> | "
          "consent <recipient> <channel> <source> <YYYY-MM-DD> <timezone|unknown> [region] | "
          "revoke <recipient> <channel> | reply <recipient> <channel> [thread] | "
          "variables <recipient> <channel> '<JSON object>']")
+
+
+def _field(source, name):
+    value = source.get(name) if isinstance(source, dict) else getattr(source, name, None)
+    return getattr(value, "value", value)
 
 
 def _local_context(platform, source):
@@ -24,21 +29,45 @@ def _local_context(platform, source):
         return False
     if source is None:
         return True
-    origin = source.get("platform") if isinstance(source, dict) else getattr(source, "platform", None)
-    return getattr(origin, "value", origin) == "local"
+    return _field(source, "platform") == "local"
+
+
+def _owner_context(platform, source, owner_ids):
+    """True for a direct chat from a configured ``platform:user_id`` owner identity.
+
+    The host's gateway passes the authenticated ``SessionSource`` of the message that
+    carried the command; its platform must agree with the ``platform`` keyword. Group
+    chats are refused so records are never read out to other participants.
+    """
+    if not owner_ids or source is None or not isinstance(platform, str) or not platform:
+        return False
+    if _field(source, "platform") != platform or _field(source, "chat_type") != "dm":
+        return False
+    user = _field(source, "user_id")
+    return isinstance(user, str) and bool(user) and f"{platform}:{user}" in owner_ids
 
 
 def command(service, raw="", *, platform="", source=None, **kwargs):
     # Public calling-session keywords (plugin developer guide, slash commands).
-    if not _local_context(platform, source):
-        return "Only the local owner at a Hermes terminal or desktop can use Gatekeeper commands."
+    if not (_local_context(platform, source) or _owner_context(platform, source, service.settings.owner_ids)):
+        return "Only the owner can manage texting consent and opt-outs."
     try:
         parts = shlex.split(raw)
+        if parts == ["resume"]:
+            # The owner has reviewed an opt-out that could not be tied to a sender.
+            if not service.unhealthy.is_set():
+                return "Gatekeeper: ready; nothing to resume."
+            if service.recover(owner=True):
+                return "Gatekeeper: storage is readable again; held opt-outs were saved and sends resume."
+            return "Gatekeeper could not read or change its record. Sends stay blocked."
+        if not parts:
+            service.recover()  # outside the transaction below: recovery opens its own
         with service.ledger.transaction() as db:
             if not parts:
                 counts = {table: db.execute("SELECT count(*) FROM " + table).fetchone()[0]
                           for table in ("suppressions", "contacts", "decisions")}
-                state = "needs attention" if service.config_error or service.unhealthy.is_set() else "ready"
+                state = ("needs attention: settings are invalid" if service.config_error else
+                         f"needs attention: {service.health_reason}; sends blocked" if service.unhealthy.is_set() else "ready")
                 return (f"Gatekeeper: {state}; suppressed: {counts['suppressions']}; "
                         f"contacts: {counts['contacts']}; decisions: {counts['decisions']}. "
                         "Only hook-visible sends are gated. " + USAGE)

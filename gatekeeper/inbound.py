@@ -1,15 +1,13 @@
 """Observe only the public normalized, profile-scoped admission snapshot."""
 import json
-import logging
 
 from . import consent, history, suppression
 from .storage import body_hash, canonical_recipient
 
-logger = logging.getLogger("hermes-gatekeeper")
-
 
 def observe(service, *, platform="", source=None, message_id="", text="", **kwargs):
     stop = suppression.is_stop(text, service.settings.stop_keywords)
+    targets = None
     try:
         if platform in {"cli", "tui", "desktop", "local", ""}:
             return None
@@ -37,8 +35,14 @@ def observe(service, *, platform="", source=None, message_id="", text="", **kwar
                 history.reply(db, chat, platform, thread, at=service.now().timestamp())
     except Exception:
         # A missed STOP/reply must not leave outbound sends running as if storage were healthy.
-        service.unhealthy.set()
-        logger.warning("Gatekeeper inbound observation failed; repair records and reload before further sends.")
+        # A STOP with known senders is held and saved by the automatic recovery; one that
+        # names no sender waits for the owner's review.
+        if stop and targets:
+            service.mark_unhealthy("an opt-out could not be saved", stop=(platform, sorted(targets), text))
+        elif stop:
+            service.mark_unhealthy("an opt-out could not be tied to a sender", latch=True)
+        else:
+            service.mark_unhealthy("an inbound message could not be recorded")
         if stop:
             return {"action": "handled"}
     return None

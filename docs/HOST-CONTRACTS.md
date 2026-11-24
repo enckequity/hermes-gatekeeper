@@ -23,6 +23,10 @@ Gatekeeper uses only public Hermes plugin interfaces:
 - Slash-command calling-session keywords `platform` and `source`. A local session's
   command runs in the gateway and receives `platform="local"` with a `SessionSource`
   whose platform is local; the classic in-process path passes `source=None`.
+  A messaging session's command receives that platform's name and the message's
+  `SessionSource` object (`gateway/run_inbound_hooks.py::_hm_run_plugin_handler` via
+  `hermes_cli/plugin_command_dispatch.py` in v0.23.3); `owner_ids` is matched against its
+  `platform`, `chat_type` and `user_id`.
 
 ## What a live agent turn reaches
 

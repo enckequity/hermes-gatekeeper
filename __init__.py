@@ -45,5 +45,5 @@ def register(ctx):
     ctx.register_hook("post_tool_call", service.after)
     ctx.register_hook("post_gateway_admission", service.inbound)
     ctx.register_command("gatekeeper", service.command,
-                         description="Local-owner outbound policy status, decisions and recipient records.",
-                         args_hint="[log | optout | consent | revoke | reply | variables]")
+                         description="Owner outbound policy status, decisions and recipient records.",
+                         args_hint="[log | resume | optout | consent | revoke | reply | variables]")

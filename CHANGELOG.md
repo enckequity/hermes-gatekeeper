@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Owner commands from an authenticated direct chat: new `owner_ids` setting (`platform:user_id`); the gateway's session source must match. Everyone else is still refused.
+- Inbound or send-observation storage failures log an `ALERT` error and recover automatically with bounded backoff (5 s doubling to 300 s); sends stay blocked until a retry succeeds. A STOP with a known sender is held and saved on recovery; one without a sender waits for the new `/gatekeeper resume`.
+- New `defer_approvals` setting for hosts that already ask before every text: Gatekeeper never asks a second time (double-text holds block; time zone and wording asks are logged as `deferred:<rule>`).
+- `REVOKE` and `OPTOUT` added to the default STOP keywords; trailing `.`/`!` and inner spaces, hyphens and underscores are ignored (`opt out`, `Stop.`).
+- User-facing messages no longer name the host application.
+
 ## 0.1.0
 
 - Deterministic absolute suppression (case-insensitive), per-channel consent and recipient-local quiet-hour rules.
